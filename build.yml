@@ -1,0 +1,75 @@
+name: Compilar MusicPlayer
+
+# Roda sozinho a cada commit, ou manualmente em Actions > Compilar MusicPlayer > Run workflow.
+# Na PRIMEIRA vez ele monta o compilador do PS3 (leva de 1h a 2h). Depois fica em cache e leva poucos minutos.
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      PS3DEV: ${{ github.workspace }}/ps3dev
+      PSL1GHT: ${{ github.workspace }}/ps3dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install autoconf automake bison flex gcc g++ libelf-dev make texinfo \
+            libncurses5-dev patch python3 python-is-python3 python3-dev python3-setuptools \
+            subversion wget zlib1g-dev libtool-bin bzip2 libgmp3-dev pkg-config libssl-dev unzip
+
+      - name: Recuperar o compilador do cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ps3dev
+          key: ps3dev-compilador-v1
+
+      - name: Montar o compilador do PS3 (so na primeira vez)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$PS3DEV"
+          git clone --depth 1 https://github.com/ps3dev/ps3toolchain.git
+          cd ps3toolchain
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          ./toolchain.sh 001 002 003 004 005 006 007 008
+
+      - name: Guardar o compilador no cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ps3dev
+          key: ps3dev-compilador-v1
+
+      - name: Extrair o projeto
+        run: unzip -qo MusicPlayerPS3.zip
+
+      - name: Baixar o decodificador de MP3 (minimp3)
+        working-directory: ps3app
+        run: wget -q -O source/minimp3.h https://raw.githubusercontent.com/lieff/minimp3/master/minimp3.h || rm -f source/minimp3.h
+
+      - name: Compilar o app
+        working-directory: ps3app
+        run: |
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          if ! make pkg; then
+            echo "Falhou com MP3. Tentando so com WAV..."
+            rm -f source/minimp3.h
+            make clean
+            make pkg
+          fi
+          ls -l MusicPlayer.* build/pkg/USRDIR/EBOOT.BIN
+
+      - name: Guardar os arquivos gerados
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusicPlayer
+          path: |
+            ps3app/MusicPlayer.pkg
+            ps3app/MusicPlayer.self
+            ps3app/build/pkg/USRDIR/EBOOT.BIN
